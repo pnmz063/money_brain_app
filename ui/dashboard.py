@@ -179,6 +179,7 @@ def render_dashboard(selected_month: date, user_id: int):
         if tx_df.empty:
             st.info("За этот месяц операций пока нет.")
         else:
+            row_idx = 0
             for tx_date_val, day_group in tx_df.groupby("tx_date", sort=False):
                 st.caption(tx_date_val)
                 for _, row in day_group.iterrows():
@@ -197,9 +198,10 @@ def render_dashboard(selected_month: date, user_id: int):
                     with rc2:
                         st.markdown(f":{color}[{sign}{fmt_rub(amt)}]")
                     with rc3:
-                        if st.button("X", key=f"del_{row['id']}"):
+                        if st.button("X", key=f"del_{row['id']}_{row_idx}"):
                             delete_transaction(int(row["id"]), user_id)
                             st.rerun()
+                    row_idx += 1
 
         # Быстрый ввод дохода
         with st.expander("Добавить доход"):
