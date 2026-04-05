@@ -1,105 +1,87 @@
-from typing import Any, Dict
+from __future__ import annotations
+
+from typing import Dict, Any
+
+
+def _to_float(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    s = str(value).strip()
+
+    if not s:
+        return default
+
+    lowered = s.lower()
+    if lowered in {"none", "null", "nan"}:
+        return default
+
+    s = s.replace(" ", "").replace("\xa0", "").replace("%", "")
+
+    if "," in s and "." not in s:
+        s = s.replace(",", ".")
+    elif "," in s and "." in s:
+        s = s.replace(",", "")
+
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return default
 
 
 def classify_obligation(obligation: Dict[str, Any]) -> Dict[str, Any]:
-    rate = float(obligation.get("rate", 0) or 0)
-    obligation_type = obligation.get("obligation_type", "loan")
+    rate = _to_float(obligation.get("rate", 0))
+    obligation_type = str(obligation.get("obligation_type", "loan") or "loan").strip()
     prepayment_allowed = bool(obligation.get("prepayment_allowed", True))
-    manual_mode = obligation.get("manual_prepayment_mode", "auto")
-    balance = float(obligation.get("balance", 0) or 0)
-    monthly_payment = float(obligation.get("monthly_payment", 0) or 0)
+    manual_mode = str(obligation.get("manual_prepayment_mode", "auto") or "auto").strip()
 
     if manual_mode == "skip_prepayment":
         return {
-            "priority_score": -1,
+            "priority_score": -1.0,
             "recommended_action": "skip",
-            "recommendation_reason": "Пользователь пометил долг как нецелевой для досрочного погашения.",
-            "priority": 5,
-        }
-
-    if manual_mode == "minimum_only":
-        return {
-            "priority_score": 0,
-            "recommended_action": "minimum_only",
-            "recommendation_reason": "Пользователь выбрал платить только обязательный минимум.",
-            "priority": 4,
+            "recommendation_reason": "Долг исключён из досрочного погашения вручную.",
         }
 
     if not prepayment_allowed:
         return {
-            "priority_score": 0,
+            "priority_score": 0.0,
             "recommended_action": "minimum_only",
-            "recommendation_reason": "По долгу есть ограничение на досрочное погашение или досрочка сейчас нежелательна.",
-            "priority": 4,
+            "recommendation_reason": "Для этого долга досрочное погашение отключено.",
         }
 
     if obligation_type == "installment" or rate <= 6:
         return {
-            "priority_score": 5 + rate,
+            "priority_score": 10.0 + rate,
             "recommended_action": "skip",
-            "recommendation_reason": "Низкая ставка или рассрочка: досрочка не в приоритете, важнее ликвидность и подушка.",
-            "priority": 5,
+            "recommendation_reason": "Ставка низкая: досрочка не в приоритете.",
         }
 
-    score = 0.0
     if obligation_type == "credit_card":
-        score += 120
-    elif obligation_type == "loan":
-        score += 80
-    elif obligation_type == "car_loan":
-        score += 55
-    elif obligation_type == "mortgage":
-        score += 20
-    else:
-        score += 40
-
-    score += rate * 2.0
-    if balance > 0:
-        score += min(balance / 100000, 25)
-    if monthly_payment > 0:
-        score += min(monthly_payment / 10000, 10)
-
-    if obligation_type == "mortgage" and rate < 10:
-        score -= 20
-
-    if rate >= 20 or obligation_type == "credit_card":
         return {
-            "priority_score": round(score, 2),
+            "priority_score": 100.0 + rate,
             "recommended_action": "fast",
-            "recommendation_reason": "Высокая стоимость долга: его стоит гасить в первую очередь.",
-            "priority": 1,
+            "recommendation_reason": "Кредитная карта с высокой стоимостью долга.",
+        }
+
+    if rate >= 18:
+        return {
+            "priority_score": 80.0 + rate,
+            "recommended_action": "fast",
+            "recommendation_reason": "Высокая ставка: гасить в первую очередь.",
         }
 
     if rate >= 12:
         return {
-            "priority_score": round(score, 2),
+            "priority_score": 50.0 + rate,
             "recommended_action": "medium",
-            "recommendation_reason": "Ставка заметная: досрочка полезна, но не обязательно забирать туда весь остаток.",
-            "priority": 2,
+            "recommendation_reason": "Средняя ставка: можно гасить после самых дорогих долгов.",
         }
 
     return {
-        "priority_score": round(score, 2),
-        "recommended_action": "minimum_only",
-        "recommendation_reason": "Ставка умеренная или низкая: достаточно платить по графику или направлять небольшую досрочку.",
-        "priority": 3,
+        "priority_score": 20.0 + rate,
+        "recommended_action": "medium",
+        "recommendation_reason": "Долг можно гасить досрочно, но он не самый дорогой.",
     }
-
-
-def rank_obligations(obligations: list[dict]) -> list[dict]:
-    ranked = []
-    for item in obligations:
-        result = classify_obligation(item)
-        merged = {**item, **result}
-        ranked.append(merged)
-    return sorted(ranked, key=lambda x: (x["priority_score"], -x["priority"]), reverse=True)
-
-
-def action_label(action: str) -> str:
-    mapping = {
-        "fast": "Гасить в первую очередь",
-        "medium": "Гасить умеренно",
-        "minimum_only": "Платить по графику / минимум",
-        "skip": "Не гасить досрочно",
-    }
-    return mapping.get(action, action)
