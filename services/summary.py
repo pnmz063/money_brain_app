@@ -38,7 +38,7 @@ def monthly_summary(selected_day: date, user_id: int):
         savings_total = df.loc[df["kind"] == "savings", "amount"].sum()
 
         expense_df = df[df["kind"] == "expense"].copy()
-        fixed_expense_total = expense_df.loc[expense_df["is_fixed"] == 1, "amount"].sum()
+        fixed_expense_total = expense_df.loc[expense_df["is_fixed"] == True, "amount"].sum()  # noqa: E712
         variable_mandatory_total = expense_df.loc[expense_df["expense_scope"] == "variable_mandatory", "amount"].sum()
         variable_life_total = expense_df.loc[expense_df["expense_scope"] == "variable_life", "amount"].sum()
 
@@ -84,23 +84,26 @@ def monthly_summary(selected_day: date, user_id: int):
 
     strategy_name = get_setting("strategy_name", user_id, "balanced")
 
+    def _r(v):
+        return round(float(v), 2)
+
     return {
         "df": df,
-        "income_total": round(income_total, 2),
-        "expense_total": round(expense_total, 2),
-        "prepayment_total": round(prepayment_total, 2),
-        "savings_total": round(savings_total, 2),
-        "fixed_expense_total": round(fixed_expense_total, 2),
-        "variable_mandatory_total": round(variable_mandatory_total, 2),
-        "variable_life_total": round(variable_life_total, 2),
-        "mandatory_total": round(mandatory_total, 2),
-        "free_cash_flow": round(free_cash_flow, 2),
-        "life_budget": round(life_budget, 2),
-        "life_budget_left": round(life_budget_left, 2),
-        "recommended_prepayment": round(recommended_prepayment, 2),
-        "recommended_savings": round(recommended_savings, 2),
-        "daily_limit": round(daily_limit, 2),
-        "spent_today": round(spent_today, 2),
+        "income_total": _r(income_total),
+        "expense_total": _r(expense_total),
+        "prepayment_total": _r(prepayment_total),
+        "savings_total": _r(savings_total),
+        "fixed_expense_total": _r(fixed_expense_total),
+        "variable_mandatory_total": _r(variable_mandatory_total),
+        "variable_life_total": _r(variable_life_total),
+        "mandatory_total": _r(mandatory_total),
+        "free_cash_flow": _r(free_cash_flow),
+        "life_budget": _r(life_budget),
+        "life_budget_left": _r(life_budget_left),
+        "recommended_prepayment": _r(recommended_prepayment),
+        "recommended_savings": _r(recommended_savings),
+        "daily_limit": _r(daily_limit),
+        "spent_today": _r(spent_today),
         "remaining_days": remaining_days,
         "prepayment_target": prepayment_target,
         "prepayment_allocations": prepayment_allocations,
