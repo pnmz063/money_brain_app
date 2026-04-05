@@ -3,12 +3,46 @@ from __future__ import annotations
 from typing import List, Dict, Any
 
 
+def _to_float(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+
+    if isinstance(value, (int, float)):
+        return float(value)
+
+    s = str(value).strip()
+
+    if not s:
+        return default
+
+    lowered = s.lower()
+    if lowered in {"none", "null", "nan"}:
+        return default
+
+    # Убираем пробелы и неразрывные пробелы
+    s = s.replace(" ", "").replace("\xa0", "")
+
+    # Если только запятая и нет точки — считаем запятую десятичным разделителем
+    if "," in s and "." not in s:
+        s = s.replace(",", ".")
+
+    # Если и запятая, и точка — считаем запятые разделителями тысяч
+    elif "," in s and "." in s:
+        s = s.replace(",", "")
+
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return default
+
+
 def normalize_obligation(ob: Dict[str, Any]) -> Dict[str, Any]:
     return {
         **ob,
-        "balance": float(ob.get("balance", 0) or 0),
-        "monthly_payment": float(ob.get("monthly_payment", 0) or 0),
-        "priority_score": float(ob.get("priority_score", 0) or 0),
+        "balance": _to_float(ob.get("balance", 0)),
+        "monthly_payment": _to_float(ob.get("monthly_payment", 0)),
+        "priority_score": _to_float(ob.get("priority_score", 0)),
+        "rate": _to_float(ob.get("rate", 0)),
         "prepayment_allowed": bool(ob.get("prepayment_allowed", True)),
         "exclude_from_prepayment": bool(ob.get("exclude_from_prepayment", False)),
         "prepayment_order": ob.get("prepayment_order"),
@@ -37,30 +71,31 @@ def choose_prepayment_target(obligations: List[Dict[str, Any]]) -> Dict[str, Any
         manual_ranked.sort(
             key=lambda x: (
                 int(x["prepayment_order"]),
-                -float(x["balance"]),
+                -x["balance"],
             )
         )
         return manual_ranked[0]
 
-    # Гасим самый дорогой кредит первым (highest rate → highest score)
+    # По умолчанию — самый дорогой долг
     candidates.sort(
         key=lambda x: (
-            -float(x.get("rate", 0) or 0),
-            -float(x["priority_score"]),
+            -x["rate"],
+            -x["priority_score"],
+            -x["balance"],
         )
     )
     return candidates[0]
 
 
 def allocate_prepayment(obligations: List[Dict[str, Any]], prepayment_budget: float) -> List[Dict[str, Any]]:
-    budget = max(float(prepayment_budget), 0.0)
+    budget = max(_to_float(prepayment_budget), 0.0)
     items = [normalize_obligation(x) for x in obligations]
     target = choose_prepayment_target(items)
 
     result = []
     for ob in items:
         allocated = 0.0
-        if target and ob["name"] == target["name"]:
+        if target and ob.get("name") == target.get("name"):
             allocated = min(budget, ob["balance"]) if ob["balance"] > 0 else budget
 
         result.append({
@@ -71,9 +106,9 @@ def allocate_prepayment(obligations: List[Dict[str, Any]], prepayment_budget: fl
     return sorted(
         result,
         key=lambda x: (
-            -float(x["allocated_prepayment"]),
+            -_to_float(x.get("allocated_prepayment", 0)),
             x["prepayment_order"] if x["prepayment_order"] is not None else 999999,
-            -float(x["balance"]),
-            -float(x["priority_score"]),
+            -_to_float(x.get("balance", 0)),
+            -_to_float(x.get("priority_score", 0)),
         )
     )
