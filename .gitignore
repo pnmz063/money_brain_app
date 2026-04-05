@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Database (local dev only — each deploy gets its own)
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
