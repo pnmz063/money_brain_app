@@ -1,28 +1,37 @@
+from __future__ import annotations
+
 import os
-import sqlite3
-from pathlib import Path
 
-# Local dev: DB рядом с проектом.
-# Streamlit Cloud: /tmp/ (writable).
-# Переменная окружения BUDGET_DB_DIR позволяет задать путь явно.
+import psycopg2
+import psycopg2.extras
 
-_default_dir = Path(__file__).resolve().parent.parent
-_db_dir = Path(os.environ.get("BUDGET_DB_DIR", ""))
 
-if _db_dir == Path(""):
-    # Проверяем, можно ли писать в каталог проекта
+def _get_database_url() -> str:
+    """Read DATABASE_URL from env or Streamlit secrets."""
+    url = os.environ.get("DATABASE_URL", "")
+    if url:
+        return url
     try:
-        _test = _default_dir / ".write_test"
-        _test.touch()
-        _test.unlink()
-        _db_dir = _default_dir
-    except OSError:
-        _db_dir = Path("/tmp")
-
-DB_PATH = _db_dir / "budget_mvp.db"
+        import streamlit as st
+        url = st.secrets.get("DATABASE_URL", "")
+        return url
+    except Exception:
+        return ""
 
 
 def get_conn():
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+    """Return a new psycopg2 connection with RealDictCursor."""
+    url = _get_database_url()
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL не задана. "
+            "Добавь Supabase connection string в .streamlit/secrets.toml "
+            "или в переменную окружения DATABASE_URL."
+        )
+    conn = psycopg2.connect(
+        url,
+        cursor_factory=psycopg2.extras.RealDictCursor,
+        connect_timeout=10,
+    )
+    conn.autocommit = False
     return conn

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import pandas as pd
 from db.connection import get_conn
 
@@ -7,7 +9,7 @@ def read_obligations(user_id: int):
     df = pd.read_sql_query("""
         SELECT *
         FROM obligations
-        WHERE is_active = 1 AND user_id = ?
+        WHERE is_active = TRUE AND user_id = %s
         ORDER BY
             CASE WHEN prepayment_order IS NULL THEN 999999 ELSE prepayment_order END ASC,
             priority ASC,
@@ -37,42 +39,20 @@ def add_obligation(
     exclude_from_prepayment=False,
 ):
     conn = get_conn()
-    conn.execute("""
+    cur = conn.cursor()
+    cur.execute("""
         INSERT INTO obligations(
-            name,
-            obligation_type,
-            rate,
-            balance,
-            monthly_payment,
-            priority,
-            priority_score,
-            recommended_action,
-            recommendation_reason,
-            prepayment_allowed,
-            manual_prepayment_mode,
-            prepayment_order,
-            exclude_from_prepayment,
-            note,
-            is_active,
-            user_id
+            name, obligation_type, rate, balance, monthly_payment,
+            priority, priority_score, recommended_action, recommendation_reason,
+            prepayment_allowed, manual_prepayment_mode, prepayment_order,
+            exclude_from_prepayment, note, is_active, user_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, %s)
     """, (
-        name,
-        obligation_type,
-        rate,
-        balance,
-        monthly_payment,
-        priority,
-        priority_score,
-        recommended_action,
-        recommendation_reason,
-        1 if prepayment_allowed else 0,
-        manual_prepayment_mode,
-        prepayment_order,
-        1 if exclude_from_prepayment else 0,
-        note,
-        user_id,
+        name, obligation_type, rate, balance, monthly_payment,
+        priority, priority_score, recommended_action, recommendation_reason,
+        prepayment_allowed, manual_prepayment_mode, prepayment_order,
+        exclude_from_prepayment, note, user_id,
     ))
     conn.commit()
     conn.close()
@@ -80,8 +60,9 @@ def add_obligation(
 
 def disable_obligation(ob_id: int, user_id: int):
     conn = get_conn()
-    conn.execute(
-        "UPDATE obligations SET is_active = 0 WHERE id = ? AND user_id = ?",
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE obligations SET is_active = FALSE WHERE id = %s AND user_id = %s",
         (ob_id, user_id),
     )
     conn.commit()

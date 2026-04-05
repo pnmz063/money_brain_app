@@ -8,7 +8,7 @@ from db.connection import get_conn
 
 
 def _hash_password(password: str, salt: Optional[bytes] = None) -> Tuple[str, str]:
-    """Hash password with SHA-256 + random salt. Returns (hash_hex, salt_hex)."""
+    """Hash password with PBKDF2-SHA256 + random salt. Returns (hash_hex, salt_hex)."""
     if salt is None:
         salt = os.urandom(32)
     pw_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100_000)
@@ -21,34 +21,36 @@ def _verify_password(password: str, stored_hash: str, stored_salt: str) -> bool:
     return pw_hash.hex() == stored_hash
 
 
-def create_user(username: str, password: str, display_name: str = "") -> int | None:
+def create_user(username: str, password: str, display_name: str = "") -> Optional[int]:
     """Register a new user. Returns user_id or None if username taken."""
     pw_hash, salt = _hash_password(password)
-    # Store as "hash:salt" in password_hash column
     combined = f"{pw_hash}:{salt}"
     conn = get_conn()
     try:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO users(username, password_hash, display_name) VALUES (?, ?, ?)",
+            "INSERT INTO users(username, password_hash, display_name) VALUES (%s, %s, %s) RETURNING id",
             (username.strip(), combined, display_name.strip() or username.strip()),
         )
+        row = cur.fetchone()
         conn.commit()
-        user_id = cur.lastrowid
-        return user_id
+        return row["id"] if row else None
     except Exception:
+        conn.rollback()
         return None
     finally:
         conn.close()
 
 
-def authenticate(username: str, password: str) -> dict | None:
+def authenticate(username: str, password: str) -> Optional[dict]:
     """Check credentials. Returns user dict or None."""
     conn = get_conn()
-    row = conn.execute(
-        "SELECT id, username, password_hash, display_name FROM users WHERE username = ?",
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, username, password_hash, display_name FROM users WHERE username = %s",
         (username.strip(),),
-    ).fetchone()
+    )
+    row = cur.fetchone()
     conn.close()
 
     if row is None:
@@ -68,12 +70,14 @@ def authenticate(username: str, password: str) -> dict | None:
     return None
 
 
-def get_user_by_id(user_id: int) -> dict | None:
+def get_user_by_id(user_id: int) -> Optional[dict]:
     conn = get_conn()
-    row = conn.execute(
-        "SELECT id, username, display_name FROM users WHERE id = ?",
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, username, display_name FROM users WHERE id = %s",
         (user_id,),
-    ).fetchone()
+    )
+    row = cur.fetchone()
     conn.close()
     if row:
         return {"id": row["id"], "username": row["username"], "display_name": row["display_name"]}
