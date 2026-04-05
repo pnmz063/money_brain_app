@@ -8,7 +8,7 @@ from repositories.transactions_repo import add_transaction, delete_transaction
 from repositories.obligations_repo import read_obligations, add_obligation, disable_obligation
 from repositories.categories_repo import read_categories, add_category, disable_category, ensure_category
 from services.summary import monthly_summary, fmt_rub
-from services.debt_priority import classify_obligation, action_label
+from services.debt_priority import classify_obligation, action_label, _to_float
 from services.onboarding import STRATEGIES
 
 
@@ -183,7 +183,7 @@ def render_dashboard(selected_month: date, user_id: int):
                 st.caption(tx_date_val)
                 for _, row in day_group.iterrows():
                     kind = row["kind"]
-                    amt = float(row["amount"])
+                    amt = _to_float(row["amount"])
                     sign = "+" if kind == "income" else "-"
                     color = "green" if kind == "income" else "red"
 
@@ -365,7 +365,7 @@ def render_dashboard(selected_month: date, user_id: int):
         if not ob_df.empty:
             with st.expander("Отключить обязательство"):
                 ob_options = {
-                    int(r["id"]): f"{r['name']} · {fmt_rub(float(r['monthly_payment']))}/мес"
+                    int(r["id"]): f"{r['name']} · {fmt_rub(_to_float(r['monthly_payment']))}/мес"
                     for _, r in ob_df.iterrows()
                 }
                 ob_to_disable = st.selectbox(
