@@ -1,8 +1,8 @@
 from datetime import date
 import streamlit as st
 
-from db.migrations import init_db
-from repositories.admin_repo import reset_application_data
+from db.migrations import init_db, seed_defaults_for_user
+from repositories.admin_repo import reset_user_data
 from repositories.settings_repo import get_setting, bulk_set_settings
 from repositories.transactions_repo import add_transaction, delete_transaction
 from repositories.obligations_repo import read_obligations, add_obligation, disable_obligation
@@ -34,7 +34,7 @@ STRATEGY_LABELS = {
 }
 
 
-def _apply_strategy(strategy_name: str):
+def _apply_strategy(strategy_name: str, user_id: int):
     strategy = STRATEGIES[strategy_name]
     bulk_set_settings(
         {
@@ -42,23 +42,26 @@ def _apply_strategy(strategy_name: str):
             "strategy_life_pct": strategy["life_pct"],
             "strategy_prepayment_pct": strategy["prepayment_pct"],
             "strategy_savings_pct": strategy["savings_pct"],
-        }
+        },
+        user_id=user_id,
     )
 
 
-def _reset_and_return_to_onboarding():
-    reset_application_data()
-    init_db()
+def _reset_and_return_to_onboarding(user_id: int):
+    reset_user_data(user_id)
+    seed_defaults_for_user(user_id)
+    # Keep auth keys, clear the rest
+    keep_keys = {"user_id", "display_name", "username"}
     for key in list(st.session_state.keys()):
-        del st.session_state[key]
+        if key not in keep_keys:
+            del st.session_state[key]
     st.rerun()
 
 
-# ─── helpers ────────────────────────────────────────────────────────
+# --- helpers ---
 
-def _get_default_expense_cat_id():
-    """Return the id of the default 'variable_life' expense category."""
-    cats = read_categories("expense")
+def _get_default_expense_cat_id(user_id: int):
+    cats = read_categories("expense", user_id=user_id)
     life = cats[cats["expense_scope"] == "variable_life"]
     if not life.empty:
         return int(life.iloc[0]["id"])
@@ -67,17 +70,17 @@ def _get_default_expense_cat_id():
     return None
 
 
-def _get_default_income_cat_id():
-    cats = read_categories("income")
+def _get_default_income_cat_id(user_id: int):
+    cats = read_categories("income", user_id=user_id)
     if not cats.empty:
         return int(cats.iloc[0]["id"])
     return None
 
 
-# ─── main render ────────────────────────────────────────────────────
+# --- main render ---
 
-def render_dashboard(selected_month: date):
-    # ── Sidebar ──────────────────────────────────────────────────────
+def render_dashboard(selected_month: date, user_id: int):
+    # -- Sidebar --
     with st.sidebar:
         st.header("Период")
         selected_month = st.date_input(
@@ -86,7 +89,7 @@ def render_dashboard(selected_month: date):
 
         st.divider()
         st.header("Стратегия")
-        strategy_name = get_setting("strategy_name", "balanced")
+        strategy_name = get_setting("strategy_name", user_id, "balanced")
         strategy = st.radio(
             "Текущая",
             options=list(STRATEGY_LABELS.keys()),
@@ -98,20 +101,18 @@ def render_dashboard(selected_month: date):
             ),
         )
         if st.button("Применить"):
-            _apply_strategy(strategy)
+            _apply_strategy(strategy, user_id)
             st.rerun()
 
         st.divider()
         with st.expander("Опасная зона"):
             confirm_reset = st.checkbox("Да, стереть все данные")
             if st.button("Сброс", type="secondary", disabled=not confirm_reset):
-                _reset_and_return_to_onboarding()
+                _reset_and_return_to_onboarding(user_id)
 
-    summary = monthly_summary(selected_month)
+    summary = monthly_summary(selected_month, user_id)
 
-    # ══════════════════════════════════════════════════════════════════
-    #  БЛОК 1 — Дневной трекер
-    # ══════════════════════════════════════════════════════════════════
+    # ---- БЛОК 1 — Дневной трекер ----
     st.markdown("## Сегодня")
 
     m1, m2, m3, m4 = st.columns(4)
@@ -123,7 +124,7 @@ def render_dashboard(selected_month: date):
     if summary["daily_limit"] <= 0 < summary["life_budget"]:
         st.warning("Бюджет на жизнь в этом месяце исчерпан.")
 
-    # ── Быстрый ввод расхода (минимум полей) ─────────────────────────
+    # -- Быстрый ввод расхода --
     with st.form("quick_expense", clear_on_submit=True):
         qc1, qc2, qc3 = st.columns([3, 2, 1])
         with qc1:
@@ -136,28 +137,28 @@ def render_dashboard(selected_month: date):
                 label_visibility="collapsed", key="qe_amt"
             )
         with qc3:
-            qe_submit = st.form_submit_button("＋ Расход", type="primary")
+            qe_submit = st.form_submit_button("+ Расход", type="primary")
 
     if qe_submit and qe_amount > 0:
-        cat_id = _get_default_expense_cat_id()
+        cat_id = _get_default_expense_cat_id(user_id)
         if cat_id is None:
             st.error("Нет категорий расходов. Добавь на вкладке «Ещё».")
         else:
             label = qe_name.strip() if qe_name.strip() else "Расход"
             add_transaction(
                 date.today().isoformat(), label, float(qe_amount),
-                "expense", cat_id, False, ""
+                "expense", cat_id, user_id, False, ""
             )
             st.rerun()
     elif qe_submit and qe_amount <= 0:
         st.error("Введи сумму.")
 
-    # ── Приоритетный долг ────────────────────────────────────────────
+    # -- Приоритетный долг --
     target = summary["prepayment_target"]
     if target:
         with st.container(border=True):
             st.markdown(
-                f"**Гасить первым → {target['name']}**"
+                f"**Гасить первым -> {target['name']}**"
                 f"  ·  {OBLIGATION_TYPE_LABELS.get(target['obligation_type'], target['obligation_type'])}"
                 f"  ·  {target['rate']}%"
             )
@@ -169,24 +170,21 @@ def render_dashboard(selected_month: date):
 
     st.divider()
 
-    # ══════════════════════════════════════════════════════════════════
-    #  БЛОК 2 — Табы
-    # ══════════════════════════════════════════════════════════════════
+    # ---- БЛОК 2 — Табы ----
     tab1, tab2, tab3 = st.tabs(["Операции", "Сводка", "Ещё"])
 
-    # ── Таб «Операции» — чистый список за месяц ──────────────────────
+    # -- Таб «Операции» --
     with tab1:
         tx_df = summary["df"]
         if tx_df.empty:
             st.info("За этот месяц операций пока нет.")
         else:
-            # Группировка по дню
             for tx_date_val, day_group in tx_df.groupby("tx_date", sort=False):
                 st.caption(tx_date_val)
                 for _, row in day_group.iterrows():
                     kind = row["kind"]
                     amt = float(row["amount"])
-                    sign = "+" if kind == "income" else "−"
+                    sign = "+" if kind == "income" else "-"
                     color = "green" if kind == "income" else "red"
 
                     rc1, rc2, rc3 = st.columns([5, 2, 1])
@@ -199,11 +197,11 @@ def render_dashboard(selected_month: date):
                     with rc2:
                         st.markdown(f":{color}[{sign}{fmt_rub(amt)}]")
                     with rc3:
-                        if st.button("✕", key=f"del_{row['id']}"):
-                            delete_transaction(int(row["id"]))
+                        if st.button("X", key=f"del_{row['id']}"):
+                            delete_transaction(int(row["id"]), user_id)
                             st.rerun()
 
-        # Быстрый ввод дохода (свёрнут)
+        # Быстрый ввод дохода
         with st.expander("Добавить доход"):
             with st.form("quick_income_form", clear_on_submit=True):
                 qi_name = st.text_input("Откуда", placeholder="Зарплата, фриланс, возврат…")
@@ -211,20 +209,20 @@ def render_dashboard(selected_month: date):
                 qi_submit = st.form_submit_button("Добавить доход")
 
             if qi_submit and qi_amount > 0:
-                cat_id = _get_default_income_cat_id()
+                cat_id = _get_default_income_cat_id(user_id)
                 if cat_id is None:
                     st.error("Нет категорий доходов. Добавь на вкладке «Ещё».")
                 else:
                     label = qi_name.strip() if qi_name.strip() else "Доход"
                     add_transaction(
                         date.today().isoformat(), label, float(qi_amount),
-                        "income", cat_id, False, ""
+                        "income", cat_id, user_id, False, ""
                     )
                     st.rerun()
 
-        # Расширенная форма для досрочки / накоплений / фикс. расходов
+        # Расширенная форма
         with st.expander("Расширенная операция (досрочка, накопления и т.д.)"):
-            categories = read_categories()
+            categories = read_categories(user_id=user_id)
             income_cats = categories[categories["kind"] == "income"]
             expense_cats = categories[categories["kind"] == "expense"]
             transfer_cats = categories[categories["kind"] == "transfer"]
@@ -268,12 +266,12 @@ def render_dashboard(selected_month: date):
             if submitted and amount > 0 and name and name.strip():
                 add_transaction(
                     tx_date.isoformat(), name.strip(), float(amount),
-                    tx_kind, int(category_id), bool(is_fixed), (note or "").strip(),
+                    tx_kind, int(category_id), user_id, bool(is_fixed), (note or "").strip(),
                 )
                 st.success("Операция добавлена.")
                 st.rerun()
 
-    # ── Таб «Сводка» — месячная аналитика ────────────────────────────
+    # -- Таб «Сводка» --
     with tab2:
         st.caption(
             f"Стратегия: {summary['strategy_label']}"
@@ -313,10 +311,10 @@ def render_dashboard(selected_month: date):
                     if item["recommendation_reason"]:
                         st.caption(item["recommendation_reason"])
 
-    # ── Таб «Ещё» — обязательства + категории ────────────────────────
+    # -- Таб «Ещё» --
     with tab3:
         st.markdown("### Обязательства")
-        ob_df = read_obligations()
+        ob_df = read_obligations(user_id)
         if ob_df.empty:
             st.info("Обязательств нет.")
         else:
@@ -356,6 +354,7 @@ def render_dashboard(selected_month: date):
                 add_obligation(
                     name.strip(), obligation_type, float(rate), float(balance),
                     float(monthly_payment), int(ranked["priority"]),
+                    user_id,
                     (note or "").strip(), float(ranked["priority_score"]),
                     ranked["recommended_action"], ranked["recommendation_reason"],
                     bool(prepayment_allowed), manual_mode,
@@ -374,12 +373,12 @@ def render_dashboard(selected_month: date):
                     format_func=lambda x: ob_options[x],
                 )
                 if st.button("Отключить", type="secondary"):
-                    disable_obligation(int(ob_to_disable))
+                    disable_obligation(int(ob_to_disable), user_id)
                     st.success("Отключено.")
                     st.rerun()
 
         st.markdown("### Категории")
-        cat_df = read_categories()
+        cat_df = read_categories(user_id=user_id)
         if not cat_df.empty:
             show_cat = cat_df[["name", "kind", "expense_scope"]].copy()
             show_cat.columns = ["Название", "Тип", "Роль"]
@@ -412,7 +411,7 @@ def render_dashboard(selected_month: date):
             if submitted and cat_name and cat_name.strip():
                 try:
                     add_category(
-                        cat_name.strip(), cat_kind,
+                        cat_name.strip(), cat_kind, user_id,
                         None if expense_scope in (None, "none") else expense_scope,
                         False,
                     )
@@ -432,6 +431,6 @@ def render_dashboard(selected_month: date):
                     format_func=lambda x: cat_options[x],
                 )
                 if st.button("Отключить категорию", type="secondary"):
-                    disable_category(int(cat_to_disable))
+                    disable_category(int(cat_to_disable), user_id)
                     st.success("Отключена.")
                     st.rerun()

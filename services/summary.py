@@ -15,10 +15,10 @@ def month_bounds(any_day: date):
     return start, end
 
 
-def monthly_summary(selected_day: date):
+def monthly_summary(selected_day: date, user_id: int):
     start, end = month_bounds(selected_day)
-    df = read_transactions(start, end)
-    obligations = read_obligations()
+    df = read_transactions(start, end, user_id)
+    obligations = read_obligations(user_id)
 
     today = date.today()
 
@@ -42,7 +42,6 @@ def monthly_summary(selected_day: date):
         variable_mandatory_total = expense_df.loc[expense_df["expense_scope"] == "variable_mandatory", "amount"].sum()
         variable_life_total = expense_df.loc[expense_df["expense_scope"] == "variable_life", "amount"].sum()
 
-        # Потрачено сегодня (расходы «на жизнь» за сегодня)
         today_mask = df["tx_date"] == today.isoformat()
         today_life = df[(today_mask) & (df["kind"] == "expense") & (df["expense_scope"] == "variable_life")]
         spent_today = float(today_life["amount"].sum()) if not today_life.empty else 0.0
@@ -50,96 +49,74 @@ def monthly_summary(selected_day: date):
     mandatory_total = fixed_expense_total + variable_mandatory_total
     free_cash_flow = max(income_total - mandatory_total, 0)
 
-    life_pct = float(get_setting("strategy_life_pct", "60")) / 100.0
-    prepayment_pct = float(get_setting("strategy_prepayment_pct", "25")) / 100.0
-    savings_pct = float(get_setting("strategy_savings_pct", "15")) / 100.0
+    life_pct = float(get_setting("strategy_life_pct", user_id, "60")) / 100.0
+    prepayment_pct = float(get_setting("strategy_prepayment_pct", user_id, "25")) / 100.0
+    savings_pct = float(get_setting("strategy_savings_pct", user_id, "15")) / 100.0
 
     recommended_life_budget = free_cash_flow * life_pct
     recommended_prepayment = free_cash_flow * prepayment_pct
     recommended_savings = free_cash_flow * savings_pct
 
-    month_balance = income_total - expense_total
-    after_transfers_balance = month_balance - prepayment_total - savings_total
-
-    days_in_month = end.day
-    remaining_days = max((end - today).days + 1, 1) if (today.year == selected_day.year and today.month == selected_day.month) else days_in_month
-
     life_budget = recommended_life_budget
-    life_spent = variable_life_total
-    life_budget_left = life_budget - life_spent
-    life_budget_per_day_left = life_budget_left / remaining_days if remaining_days > 0 else 0
+    life_budget_left = max(life_budget - variable_life_total, 0)
 
-    obligations_records = obligations.to_dict("records") if not obligations.empty else []
-    prepayment_plan = allocate_prepayment(obligations_records, recommended_prepayment)
+    remaining_days = max((end - today).days + 1, 1) if today <= end else 0
+    daily_limit = life_budget_left / remaining_days if remaining_days > 0 else 0
 
-    # Найти ОДИН приоритетный долг для досрочного погашения
-    from services.prepayment import choose_prepayment_target
-    target_ob = choose_prepayment_target(obligations_records)
+    obligation_records = obligations.to_dict("records") if not obligations.empty else []
+    prepayment_allocations = allocate_prepayment(obligation_records, recommended_prepayment)
+
     prepayment_target = None
-    if target_ob:
-        alloc = next((p for p in prepayment_plan if p["name"] == target_ob["name"]), None)
-        allocated = float(alloc["allocated_prepayment"]) if alloc else 0.0
-        mp = float(target_ob["monthly_payment"])
-        prepayment_target = {
-            "name": target_ob["name"],
-            "obligation_type": target_ob.get("obligation_type", ""),
-            "rate": float(target_ob.get("rate", 0) or 0),
-            "balance": float(target_ob.get("balance", 0) or 0),
-            "monthly_payment": mp,
-            "allocated_prepayment": allocated,
-            "total_payment": mp + allocated,
-        }
-
-    strategy_name = get_setting("strategy_name", "balanced")
-    strategy_labels = {"aggressive": "Aggressive", "balanced": "Balanced", "soft": "Soft"}
+    for item in prepayment_allocations:
+        if item["allocated_prepayment"] > 0:
+            prepayment_target = {
+                **item,
+                "total_payment": item["monthly_payment"] + item["allocated_prepayment"],
+            }
+            break
 
     priority_debts = []
-    for ob in obligations_records:
-        classified = classify_obligation(ob)
-        priority_debts.append({
-            "name": ob.get("name", ""),
-            "rate": float(ob.get("rate", 0) or 0),
-            "monthly_payment": float(ob.get("monthly_payment", 0) or 0),
-            "priority_score": float(classified["priority_score"]),
-            "recommended_action": action_label(classified["recommended_action"]),
-            "recommendation_reason": classified.get("recommendation_reason", ""),
-        })
-    priority_debts.sort(key=lambda x: (-x["priority_score"],))
+    for item in obligation_records:
+        classified = classify_obligation(item)
+        merged = {**item, **classified}
+        merged["recommended_action"] = action_label(merged.get("recommended_action", "minimum_only"))
+        priority_debts.append(merged)
+
+    strategy_name = get_setting("strategy_name", user_id, "balanced")
 
     return {
-        "start": start,
-        "end": end,
         "df": df,
-        "obligations": obligations,
-        "income_total": float(income_total),
-        "expense_total": float(expense_total),
-        "fixed_expense_total": float(fixed_expense_total),
-        "variable_mandatory_total": float(variable_mandatory_total),
-        "variable_life_total": float(variable_life_total),
-        "mandatory_total": float(mandatory_total),
-        "free_cash_flow": float(free_cash_flow),
-        "prepayment_total": float(prepayment_total),
-        "savings_total": float(savings_total),
-        "month_balance": float(month_balance),
-        "after_transfers_balance": float(after_transfers_balance),
-        "life_budget": float(life_budget),
-        "life_spent": float(life_spent),
-        "life_budget_left": float(life_budget_left),
-        "life_budget_per_day_left": float(life_budget_per_day_left),
-        "remaining_days": int(remaining_days),
-        "recommended_prepayment": float(recommended_prepayment),
-        "recommended_savings": float(recommended_savings),
-        "prepayment_plan": prepayment_plan,
-        "strategy_label": strategy_labels.get(strategy_name, strategy_name),
+        "income_total": round(income_total, 2),
+        "expense_total": round(expense_total, 2),
+        "prepayment_total": round(prepayment_total, 2),
+        "savings_total": round(savings_total, 2),
+        "fixed_expense_total": round(fixed_expense_total, 2),
+        "variable_mandatory_total": round(variable_mandatory_total, 2),
+        "variable_life_total": round(variable_life_total, 2),
+        "mandatory_total": round(mandatory_total, 2),
+        "free_cash_flow": round(free_cash_flow, 2),
+        "life_budget": round(life_budget, 2),
+        "life_budget_left": round(life_budget_left, 2),
+        "recommended_prepayment": round(recommended_prepayment, 2),
+        "recommended_savings": round(recommended_savings, 2),
+        "daily_limit": round(daily_limit, 2),
+        "spent_today": round(spent_today, 2),
+        "remaining_days": remaining_days,
+        "prepayment_target": prepayment_target,
+        "prepayment_allocations": prepayment_allocations,
+        "priority_debts": priority_debts,
+        "strategy_label": strategy_name.capitalize(),
         "strategy_life_pct": life_pct * 100,
         "strategy_prepayment_pct": prepayment_pct * 100,
         "strategy_savings_pct": savings_pct * 100,
-        "priority_debts": priority_debts,
-        "prepayment_target": prepayment_target,
-        "spent_today": float(spent_today),
-        "daily_limit": float(life_budget_per_day_left),
     }
 
 
-def fmt_rub(value: float):
-    return f"{value:,.0f} ₽".replace(",", " ")
+def fmt_rub(value):
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if v == int(v):
+        return f"{int(v):,} \u20BD".replace(",", "\u202F")
+    return f"{v:,.2f} \u20BD".replace(",", "\u202F")

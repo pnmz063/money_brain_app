@@ -25,24 +25,25 @@ OBLIGATION_CATEGORY_BY_TYPE = {
 }
 
 
-def _create_income_transactions(today: str, incomes: list):
+def _create_income_transactions(today: str, incomes: list, user_id: int):
     for item in incomes:
         if float(item["amount"]) <= 0:
             continue
 
-        category_id = ensure_category(item["category_name"], "income")
+        category_id = ensure_category(item["category_name"], "income", user_id)
         add_transaction(
             tx_date=today,
             name=item["name"],
             amount=float(item["amount"]),
             kind="income",
             category_id=category_id,
+            user_id=user_id,
             is_fixed=False,
             note=item.get("note", "")
         )
 
 
-def _create_fixed_expense_transactions(today: str, expenses: list):
+def _create_fixed_expense_transactions(today: str, expenses: list, user_id: int):
     for item in expenses:
         if float(item["amount"]) <= 0:
             continue
@@ -50,6 +51,7 @@ def _create_fixed_expense_transactions(today: str, expenses: list):
         category_id = ensure_category(
             item["category_name"],
             "expense",
+            user_id,
             expense_scope="fixed",
             is_fixed_default=True
         )
@@ -59,13 +61,14 @@ def _create_fixed_expense_transactions(today: str, expenses: list):
             amount=float(item["amount"]),
             kind="expense",
             category_id=category_id,
+            user_id=user_id,
             is_fixed=True,
             note=item.get("note", "")
         )
 
 
 
-def _create_variable_mandatory_transactions(today: str, expenses: list):
+def _create_variable_mandatory_transactions(today: str, expenses: list, user_id: int):
     for item in expenses:
         if float(item["amount"]) <= 0:
             continue
@@ -73,6 +76,7 @@ def _create_variable_mandatory_transactions(today: str, expenses: list):
         category_id = ensure_category(
             item["category_name"],
             "expense",
+            user_id,
             expense_scope="variable_mandatory",
             is_fixed_default=False
         )
@@ -82,13 +86,14 @@ def _create_variable_mandatory_transactions(today: str, expenses: list):
             amount=float(item["amount"]),
             kind="expense",
             category_id=category_id,
+            user_id=user_id,
             is_fixed=False,
             note=item.get("note", "")
         )
 
 
 
-def _create_obligations(obligations: list):
+def _create_obligations(obligations: list, user_id: int):
     for item in obligations:
         if float(item["monthly_payment"]) <= 0:
             continue
@@ -102,6 +107,7 @@ def _create_obligations(obligations: list):
             balance=float(item.get("balance", 0) or 0),
             monthly_payment=float(item["monthly_payment"]),
             priority=int(classification["priority"]),
+            user_id=user_id,
             note=item.get("note", ""),
             priority_score=float(classification["priority_score"]),
             recommended_action=classification["recommended_action"],
@@ -223,14 +229,14 @@ def build_onboarding_result(payload: dict):
 
 
 
-def persist_onboarding(payload: dict):
+def persist_onboarding(payload: dict, user_id: int):
     today = date.today().isoformat()
     result = build_onboarding_result(payload)
 
-    _create_income_transactions(today, result["income_transactions"])
-    _create_fixed_expense_transactions(today, payload["fixed_expenses"])
-    _create_variable_mandatory_transactions(today, payload["variable_expenses"])
-    _create_obligations(payload["obligations"])
+    _create_income_transactions(today, result["income_transactions"], user_id)
+    _create_fixed_expense_transactions(today, payload["fixed_expenses"], user_id)
+    _create_variable_mandatory_transactions(today, payload["variable_expenses"], user_id)
+    _create_obligations(payload["obligations"], user_id)
 
     bulk_set_settings({
         "strategy_name": payload["strategy"],
@@ -240,6 +246,6 @@ def persist_onboarding(payload: dict):
         "default_life_budget": result["life_budget"],
         "tax_annual_threshold": payload["income"].get("annual_threshold", 5_000_000),
         "onboarding_completed": "true",
-    })
+    }, user_id=user_id)
 
     return result

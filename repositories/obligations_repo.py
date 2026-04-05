@@ -2,19 +2,19 @@ import pandas as pd
 from db.connection import get_conn
 
 
-def read_obligations():
+def read_obligations(user_id: int):
     conn = get_conn()
     df = pd.read_sql_query("""
         SELECT *
         FROM obligations
-        WHERE is_active = 1
+        WHERE is_active = 1 AND user_id = ?
         ORDER BY
             CASE WHEN prepayment_order IS NULL THEN 999999 ELSE prepayment_order END ASC,
             priority ASC,
             priority_score DESC,
             rate DESC,
             name
-    """, conn)
+    """, conn, params=(user_id,))
     conn.close()
     return df
 
@@ -26,6 +26,7 @@ def add_obligation(
     balance,
     monthly_payment,
     priority,
+    user_id: int,
     note="",
     priority_score=0,
     recommended_action=None,
@@ -52,9 +53,10 @@ def add_obligation(
             prepayment_order,
             exclude_from_prepayment,
             note,
-            is_active
+            is_active,
+            user_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
     """, (
         name,
         obligation_type,
@@ -70,13 +72,17 @@ def add_obligation(
         prepayment_order,
         1 if exclude_from_prepayment else 0,
         note,
+        user_id,
     ))
     conn.commit()
     conn.close()
 
 
-def disable_obligation(ob_id: int):
+def disable_obligation(ob_id: int, user_id: int):
     conn = get_conn()
-    conn.execute("UPDATE obligations SET is_active = 0 WHERE id = ?", (ob_id,))
+    conn.execute(
+        "UPDATE obligations SET is_active = 0 WHERE id = ? AND user_id = ?",
+        (ob_id, user_id),
+    )
     conn.commit()
     conn.close()

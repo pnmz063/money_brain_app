@@ -349,7 +349,8 @@ def _review_step():
     if left.button("Назад", key="review_back"):
         _go(4)
     if right.button("Сохранить и завершить", type="primary", key="review_save"):
-        saved = persist_onboarding(data)
+        user_id = st.session_state["user_id"]
+        saved = persist_onboarding(data, user_id=user_id)
         st.success("Онбординг завершён. База заполнена стартовыми данными.")
         st.info(f"Комфортный бюджет на жизнь: **{fmt_rub(saved['life_budget'])}**, рекомендованная досрочка: **{fmt_rub(saved['recommended_prepayment'])}**")
         st.rerun()
