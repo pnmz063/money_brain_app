@@ -4,7 +4,7 @@ import hashlib
 import os
 from typing import Optional, Tuple
 
-from db.connection import get_conn
+from db.connection import get_conn, dict_cursor
 
 
 def _hash_password(password: str, salt: Optional[bytes] = None) -> Tuple[str, str]:
@@ -27,7 +27,7 @@ def create_user(username: str, password: str, display_name: str = "") -> Optiona
     combined = f"{pw_hash}:{salt}"
     conn = get_conn()
     try:
-        cur = conn.cursor()
+        cur = dict_cursor(conn)
         cur.execute(
             "INSERT INTO users(username, password_hash, display_name) VALUES (%s, %s, %s) RETURNING id",
             (username.strip(), combined, display_name.strip() or username.strip()),
@@ -45,7 +45,7 @@ def create_user(username: str, password: str, display_name: str = "") -> Optiona
 def authenticate(username: str, password: str) -> Optional[dict]:
     """Check credentials. Returns user dict or None."""
     conn = get_conn()
-    cur = conn.cursor()
+    cur = dict_cursor(conn)
     cur.execute(
         "SELECT id, username, password_hash, display_name FROM users WHERE username = %s",
         (username.strip(),),
@@ -72,7 +72,7 @@ def authenticate(username: str, password: str) -> Optional[dict]:
 
 def get_user_by_id(user_id: int) -> Optional[dict]:
     conn = get_conn()
-    cur = conn.cursor()
+    cur = dict_cursor(conn)
     cur.execute(
         "SELECT id, username, display_name FROM users WHERE id = %s",
         (user_id,),

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
-from db.connection import get_conn
+from db.connection import get_conn, dict_cursor
 
 
 def read_categories(kind=None, *, user_id: int):
@@ -35,7 +35,7 @@ def add_category(name, kind, user_id: int, expense_scope=None, is_fixed_default=
 
 def ensure_category(name, kind, user_id: int, expense_scope=None, is_fixed_default=False):
     conn = get_conn()
-    cur = conn.cursor()
+    cur = dict_cursor(conn)
     cur.execute(
         "SELECT id FROM categories WHERE name = %s AND user_id = %s",
         (name, user_id),

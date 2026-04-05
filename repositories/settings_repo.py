@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from db.connection import get_conn
+from db.connection import get_conn, dict_cursor
 
 
 def get_setting(key, user_id: int, default="0"):
     conn = get_conn()
-    cur = conn.cursor()
+    cur = dict_cursor(conn)
     cur.execute(
         "SELECT value FROM settings WHERE key = %s AND user_id = %s",
         (key, user_id),

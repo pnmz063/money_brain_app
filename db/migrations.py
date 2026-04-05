@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from db.connection import get_conn
+from db.connection import get_conn, dict_cursor
 
 
 MINIMAL_DEFAULT_CATEGORIES = [
@@ -22,7 +22,12 @@ def _get_schema_version(cur) -> int:
     """)
     cur.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1")
     row = cur.fetchone()
-    return int(row["version"]) if row else 0
+    if row is None:
+        return 0
+    # Works with both tuple cursor and dict cursor
+    if isinstance(row, dict):
+        return int(row["version"])
+    return int(row[0])
 
 
 def _set_schema_version(cur, version: int):
