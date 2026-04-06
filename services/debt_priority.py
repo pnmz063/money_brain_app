@@ -2,43 +2,22 @@ from __future__ import annotations
 
 from typing import Dict, Any, List
 
+from services.utils import to_float, estimate_payoff_months
 
-def _to_float(value: Any, default: float = 0.0) -> float:
-    if value is None:
-        return default
-
-    if isinstance(value, (int, float)):
-        return float(value)
-
-    s = str(value).strip()
-
-    if not s:
-        return default
-
-    lowered = s.lower()
-    if lowered in {"none", "null", "nan"}:
-        return default
-
-    s = s.replace(" ", "").replace("\xa0", "").replace("%", "")
-
-    if "," in s and "." not in s:
-        s = s.replace(",", ".")
-    elif "," in s and "." in s:
-        s = s.replace(",", "")
-
-    try:
-        return float(s)
-    except (TypeError, ValueError):
-        return default
+# Re-export for backward compatibility (dashboard.py imports _to_float from here)
+_to_float = to_float
 
 
 def classify_obligation(obligation: Dict[str, Any]) -> Dict[str, Any]:
-    rate = _to_float(obligation.get("rate", 0))
+    rate = to_float(obligation.get("rate", 0))
     obligation_type = str(obligation.get("obligation_type", "loan") or "loan").strip()
     prepayment_allowed = bool(obligation.get("prepayment_allowed", True))
     manual_mode = str(obligation.get("manual_prepayment_mode", "auto") or "auto").strip()
-    balance = _to_float(obligation.get("balance", 0))
-    monthly_payment = _to_float(obligation.get("monthly_payment", 0))
+    balance = to_float(obligation.get("balance", 0))
+    monthly_payment = to_float(obligation.get("monthly_payment", 0))
+
+    # Estimate payoff timeline
+    payoff_months = estimate_payoff_months(balance, rate, monthly_payment)
 
     if manual_mode == "skip_prepayment":
         return {
@@ -46,6 +25,7 @@ def classify_obligation(obligation: Dict[str, Any]) -> Dict[str, Any]:
             "recommended_action": "skip",
             "recommendation_reason": "Долг исключён из досрочного погашения вручную.",
             "priority": 5,
+            "payoff_months": payoff_months,
         }
 
     if manual_mode == "minimum_only":
@@ -54,6 +34,7 @@ def classify_obligation(obligation: Dict[str, Any]) -> Dict[str, Any]:
             "recommended_action": "minimum_only",
             "recommendation_reason": "Пользователь выбрал платить только обязательный минимум.",
             "priority": 4,
+            "payoff_months": payoff_months,
         }
 
     if not prepayment_allowed:
@@ -62,7 +43,13 @@ def classify_obligation(obligation: Dict[str, Any]) -> Dict[str, Any]:
             "recommended_action": "minimum_only",
             "recommendation_reason": "Для этого долга досрочное погашение отключено.",
             "priority": 4,
+            "payoff_months": payoff_months,
         }
+
+    # Calculate total interest cost = how much you'll overpay
+    total_interest = 0.0
+    if payoff_months and payoff_months > 0 and monthly_payment > 0:
+        total_interest = max(monthly_payment * payoff_months - balance, 0)
 
     if obligation_type == "installment" or rate <= 6:
         return {
@@ -70,30 +57,59 @@ def classify_obligation(obligation: Dict[str, Any]) -> Dict[str, Any]:
             "recommended_action": "skip",
             "recommendation_reason": "Ставка низкая: досрочка не в приоритете.",
             "priority": 5,
+            "payoff_months": payoff_months,
+            "total_interest": round(total_interest, 2),
         }
+
+    # Base score from rate
+    base_score = rate
+
+    # Boost score by total interest cost (higher overpay = more urgent to prepay)
+    if total_interest > 0:
+        # Add up to 50 points based on total interest cost
+        # 100k interest -> +10, 500k -> +30, 1M+ -> +50
+        interest_bonus = min(total_interest / 20_000, 50.0)
+        base_score += interest_bonus
 
     if obligation_type == "credit_card" or rate >= 20:
         return {
-            "priority_score": 100.0 + rate,
+            "priority_score": 100.0 + base_score,
             "recommended_action": "fast",
-            "recommendation_reason": "Высокая стоимость долга: гасить в первую очередь.",
+            "recommendation_reason": f"Высокая стоимость долга: гасить первым. Переплата ~{_fmt_amount(total_interest)}.",
             "priority": 1,
+            "payoff_months": payoff_months,
+            "total_interest": round(total_interest, 2),
         }
 
     if rate >= 12:
         return {
-            "priority_score": 50.0 + rate,
+            "priority_score": 50.0 + base_score,
             "recommended_action": "medium",
-            "recommendation_reason": "Средняя ставка: можно гасить после самых дорогих долгов.",
+            "recommendation_reason": f"Средняя ставка: можно гасить после самых дорогих. Переплата ~{_fmt_amount(total_interest)}.",
             "priority": 2,
+            "payoff_months": payoff_months,
+            "total_interest": round(total_interest, 2),
         }
 
     return {
-        "priority_score": 20.0 + rate,
+        "priority_score": 20.0 + base_score,
         "recommended_action": "minimum_only",
-        "recommendation_reason": "Ставка умеренная: достаточно платить по графику.",
+        "recommendation_reason": f"Ставка умеренная: достаточно платить по графику. Переплата ~{_fmt_amount(total_interest)}.",
         "priority": 3,
+        "payoff_months": payoff_months,
+        "total_interest": round(total_interest, 2),
     }
+
+
+def _fmt_amount(value: float) -> str:
+    """Format amount in compact Russian style."""
+    if value <= 0:
+        return "0 ₽"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f} млн ₽"
+    if value >= 1_000:
+        return f"{value / 1_000:.0f} тыс ₽"
+    return f"{value:.0f} ₽"
 
 
 def rank_obligations(obligations: List[Dict]) -> List[Dict]:
@@ -102,7 +118,7 @@ def rank_obligations(obligations: List[Dict]) -> List[Dict]:
         result = classify_obligation(item)
         merged = {**item, **result}
         ranked.append(merged)
-    return sorted(ranked, key=lambda x: (-_to_float(x.get("priority_score", 0)), x.get("priority", 3)))
+    return sorted(ranked, key=lambda x: (-to_float(x.get("priority_score", 0)), x.get("priority", 3)))
 
 
 def action_label(action: str) -> str:

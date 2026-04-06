@@ -7,6 +7,7 @@ from repositories.obligations_repo import read_obligations
 from repositories.settings_repo import get_setting
 from services.prepayment import allocate_prepayment
 from services.debt_priority import classify_obligation, action_label
+from services.utils import to_float, estimate_payoff_months
 
 
 def month_bounds(any_day: date):
@@ -76,11 +77,24 @@ def monthly_summary(selected_day: date, user_id: int):
             break
 
     priority_debts = []
+    total_debt = 0.0
+    total_monthly_payments = 0.0
+    total_interest = 0.0
+    max_payoff_months = 0
     for item in obligation_records:
         classified = classify_obligation(item)
         merged = {**item, **classified}
         merged["recommended_action"] = action_label(merged.get("recommended_action", "minimum_only"))
         priority_debts.append(merged)
+
+        bal = to_float(item.get("balance", 0))
+        mp = to_float(item.get("monthly_payment", 0))
+        total_debt += bal
+        total_monthly_payments += mp
+        total_interest += to_float(classified.get("total_interest", 0))
+        pm = classified.get("payoff_months")
+        if pm is not None and pm > max_payoff_months:
+            max_payoff_months = pm
 
     strategy_name = get_setting("strategy_name", user_id, "balanced")
 
@@ -112,6 +126,10 @@ def monthly_summary(selected_day: date, user_id: int):
         "strategy_life_pct": life_pct * 100,
         "strategy_prepayment_pct": prepayment_pct * 100,
         "strategy_savings_pct": savings_pct * 100,
+        "total_debt": _r(total_debt),
+        "total_monthly_payments": _r(total_monthly_payments),
+        "total_interest": _r(total_interest),
+        "max_payoff_months": max_payoff_months,
     }
 
 

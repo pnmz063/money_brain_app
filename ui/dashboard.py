@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import date
 import streamlit as st
 
@@ -8,7 +10,8 @@ from repositories.transactions_repo import add_transaction, delete_transaction
 from repositories.obligations_repo import read_obligations, add_obligation, disable_obligation
 from repositories.categories_repo import read_categories, add_category, disable_category, ensure_category
 from services.summary import monthly_summary, fmt_rub
-from services.debt_priority import classify_obligation, action_label, _to_float
+from services.debt_priority import classify_obligation, action_label
+from services.utils import to_float as _to_float
 from services.onboarding import STRATEGIES
 
 
@@ -32,6 +35,18 @@ STRATEGY_LABELS = {
     "balanced": "Balanced",
     "soft": "Soft",
 }
+
+
+def _fmt_payoff(months: int | None) -> str:
+    if months is None:
+        return "не погасится"
+    if months == 0:
+        return "—"
+    years = months // 12
+    rem = months % 12
+    if years > 0:
+        return f"{years} г. {rem} мес."
+    return f"{months} мес."
 
 
 def _apply_strategy(strategy_name: str, user_id: int):
@@ -167,6 +182,27 @@ def render_dashboard(selected_month: date, user_id: int):
             p2.metric("Досрочка", fmt_rub(target["allocated_prepayment"]))
             p3.metric("Итого в месяц", fmt_rub(target["total_payment"]))
             p4.metric("Остаток долга", fmt_rub(target["balance"]))
+
+    # ---- Блок долговой нагрузки ----
+    if summary["total_debt"] > 0:
+        st.markdown("## Долговая нагрузка")
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("Общий долг", fmt_rub(summary["total_debt"]))
+        d2.metric("Платежи / мес", fmt_rub(summary["total_monthly_payments"]))
+        months = summary["max_payoff_months"]
+        if months and months > 0:
+            years = months // 12
+            rem = months % 12
+            if years > 0:
+                d3.metric("До полного погашения", f"{years} г. {rem} мес.")
+            else:
+                d3.metric("До полного погашения", f"{months} мес.")
+        else:
+            d3.metric("До полного погашения", "—")
+        if summary["total_interest"] > 0:
+            d4.metric("Переплата (прогноз)", fmt_rub(summary["total_interest"]))
+        else:
+            d4.metric("Переплата", "—")
 
     st.divider()
 
@@ -305,12 +341,14 @@ def render_dashboard(selected_month: date, user_id: int):
             for item in summary["priority_debts"]:
                 with st.container(border=True):
                     st.markdown(f"**{item['name']}** — {item['recommended_action']}")
-                    st.write(
-                        f"Ставка: {item['rate']}%"
-                        f" · Платёж: {fmt_rub(item['monthly_payment'])}"
-                        f" · Score: {item['priority_score']:.1f}"
-                    )
-                    if item["recommendation_reason"]:
+                    payoff = item.get("payoff_months")
+                    payoff_str = _fmt_payoff(payoff)
+                    ic1, ic2, ic3, ic4 = st.columns(4)
+                    ic1.metric("Ставка", f"{_to_float(item['rate']):.1f}%")
+                    ic2.metric("Остаток", fmt_rub(_to_float(item.get('balance', 0))))
+                    ic3.metric("Платёж/мес", fmt_rub(_to_float(item['monthly_payment'])))
+                    ic4.metric("Срок", payoff_str)
+                    if item.get("recommendation_reason"):
                         st.caption(item["recommendation_reason"])
 
     # -- Таб «Ещё» --
@@ -320,10 +358,17 @@ def render_dashboard(selected_month: date, user_id: int):
         if ob_df.empty:
             st.info("Обязательств нет.")
         else:
+            from services.utils import estimate_payoff_months
             show_df = ob_df[["name", "obligation_type", "rate", "balance", "monthly_payment", "recommended_action"]].copy()
             show_df.columns = ["Название", "Тип", "Ставка %", "Остаток", "Платёж/мес", "Действие"]
             show_df["Тип"] = show_df["Тип"].map(lambda x: OBLIGATION_TYPE_LABELS.get(x, x))
             show_df["Действие"] = show_df["Действие"].map(lambda x: action_label(x or "minimum_only"))
+            # Add payoff timeline column
+            show_df["Срок"] = ob_df.apply(
+                lambda r: _fmt_payoff(estimate_payoff_months(
+                    _to_float(r["balance"]), _to_float(r["rate"]), _to_float(r["monthly_payment"])
+                )), axis=1
+            )
             st.dataframe(show_df, use_container_width=True, hide_index=True)
 
         with st.expander("Добавить обязательство"):

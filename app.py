@@ -13,18 +13,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# Keep-alive: auto-ping every 10 minutes to prevent Streamlit Cloud from sleeping
-st.markdown(
-    """
-    <script>
-    setInterval(function() {
-        fetch(window.location.href, {method: 'HEAD', cache: 'no-store'});
-    }, 10 * 60 * 1000);
-    </script>
-    """,
-    unsafe_allow_html=True,
-)
-
 init_db()
 
 st.title("💸 Семейный бюджет MVP")

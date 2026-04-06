@@ -2,38 +2,7 @@ from __future__ import annotations
 
 from typing import List, Dict, Any
 
-
-def _to_float(value: Any, default: float = 0.0) -> float:
-    if value is None:
-        return default
-
-    if isinstance(value, (int, float)):
-        return float(value)
-
-    s = str(value).strip()
-
-    if not s:
-        return default
-
-    lowered = s.lower()
-    if lowered in {"none", "null", "nan"}:
-        return default
-
-    # Убираем пробелы и неразрывные пробелы
-    s = s.replace(" ", "").replace("\xa0", "")
-
-    # Если только запятая и нет точки — считаем запятую десятичным разделителем
-    if "," in s and "." not in s:
-        s = s.replace(",", ".")
-
-    # Если и запятая, и точка — считаем запятые разделителями тысяч
-    elif "," in s and "." in s:
-        s = s.replace(",", "")
-
-    try:
-        return float(s)
-    except (TypeError, ValueError):
-        return default
+from services.utils import to_float as _to_float
 
 
 def normalize_obligation(ob: Dict[str, Any]) -> Dict[str, Any]:

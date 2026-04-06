@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import date
 
 from repositories.categories_repo import ensure_category
