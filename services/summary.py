@@ -79,11 +79,19 @@ def monthly_summary(selected_day: date, user_id: int):
             }
             break
 
+    MORTGAGE_TYPES = {"mortgage"}
+
     priority_debts = []
     total_debt = 0.0
     total_monthly_payments = 0.0
     total_interest = 0.0
     max_payoff_months = 0
+    # Same stats excluding mortgages
+    consumer_debt = 0.0
+    consumer_monthly = 0.0
+    consumer_interest = 0.0
+    consumer_max_months = 0
+
     for item in obligation_records:
         classified = classify_obligation(item)
         merged = {**item, **classified}
@@ -92,12 +100,22 @@ def monthly_summary(selected_day: date, user_id: int):
 
         bal = to_float(item.get("balance", 0))
         mp = to_float(item.get("monthly_payment", 0))
+        ti = to_float(classified.get("total_interest", 0))
+        pm = classified.get("payoff_months")
+        ob_type = str(item.get("obligation_type", "")).strip()
+
         total_debt += bal
         total_monthly_payments += mp
-        total_interest += to_float(classified.get("total_interest", 0))
-        pm = classified.get("payoff_months")
+        total_interest += ti
         if pm is not None and pm > max_payoff_months:
             max_payoff_months = pm
+
+        if ob_type not in MORTGAGE_TYPES:
+            consumer_debt += bal
+            consumer_monthly += mp
+            consumer_interest += ti
+            if pm is not None and pm > consumer_max_months:
+                consumer_max_months = pm
 
     strategy_name = get_setting("strategy_name", user_id, "balanced")
 
@@ -134,6 +152,11 @@ def monthly_summary(selected_day: date, user_id: int):
         "total_monthly_payments": _r(total_monthly_payments),
         "total_interest": _r(total_interest),
         "max_payoff_months": max_payoff_months,
+        "consumer_debt": _r(consumer_debt),
+        "consumer_monthly": _r(consumer_monthly),
+        "consumer_interest": _r(consumer_interest),
+        "consumer_max_months": consumer_max_months,
+        "has_mortgage": consumer_debt != total_debt,
     }
 
 

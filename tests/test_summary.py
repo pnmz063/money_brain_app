@@ -243,6 +243,59 @@ class TestMonthlySummary(unittest.TestCase):
         self.assertAlmostEqual(result["total_monthly_payments"], 50_000.0)
         self.assertGreater(result["max_payoff_months"], 0)
 
+    @patch("services.summary.get_setting")
+    @patch("services.summary.read_obligations")
+    @patch("services.summary.read_transactions")
+    def test_consumer_vs_mortgage_split(self, mock_tx, mock_ob, mock_setting):
+        """Consumer debt stats should exclude mortgage."""
+        mock_tx.return_value = _sample_transactions()
+        mock_ob.return_value = _sample_obligations()  # mortgage 4M + credit_card 80k
+        mock_setting.side_effect = lambda key, uid, default: {
+            "strategy_life_pct": "60",
+            "strategy_prepayment_pct": "25",
+            "strategy_savings_pct": "15",
+            "strategy_name": "balanced",
+        }.get(key, default)
+
+        result = monthly_summary(date(2026, 4, 6), user_id=1)
+        # Total includes mortgage
+        self.assertAlmostEqual(result["total_debt"], 4_080_000.0)
+        # Consumer excludes mortgage
+        self.assertAlmostEqual(result["consumer_debt"], 80_000.0)
+        self.assertAlmostEqual(result["consumer_monthly"], 5_000.0)
+        self.assertTrue(result["has_mortgage"])
+        self.assertGreater(result["consumer_max_months"], 0)
+        # Consumer max months < total max months (mortgage is longer)
+        self.assertLess(result["consumer_max_months"], result["max_payoff_months"])
+
+    @patch("services.summary.get_setting")
+    @patch("services.summary.read_obligations")
+    @patch("services.summary.read_transactions")
+    def test_no_mortgage_consumer_equals_total(self, mock_tx, mock_ob, mock_setting):
+        """Without mortgage, consumer stats should equal total stats."""
+        no_mortgage = pd.DataFrame([{
+            "id": 1, "name": "Кредитка", "obligation_type": "credit_card", "rate": 28.0,
+            "balance": 80_000.0, "monthly_payment": 5_000.0, "priority": 1,
+            "priority_score": 128.0, "recommended_action": "fast",
+            "recommendation_reason": "", "prepayment_allowed": True,
+            "manual_prepayment_mode": "auto", "prepayment_order": None,
+            "exclude_from_prepayment": False, "is_active": True, "note": "",
+            "user_id": 1,
+        }])
+        mock_tx.return_value = _sample_transactions()
+        mock_ob.return_value = no_mortgage
+        mock_setting.side_effect = lambda key, uid, default: {
+            "strategy_life_pct": "60",
+            "strategy_prepayment_pct": "25",
+            "strategy_savings_pct": "15",
+            "strategy_name": "balanced",
+        }.get(key, default)
+
+        result = monthly_summary(date(2026, 4, 6), user_id=1)
+        self.assertAlmostEqual(result["consumer_debt"], result["total_debt"])
+        self.assertAlmostEqual(result["consumer_monthly"], result["total_monthly_payments"])
+        self.assertFalse(result["has_mortgage"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -186,23 +186,32 @@ def render_dashboard(selected_month: date, user_id: int):
     # ---- Блок долговой нагрузки ----
     if summary["total_debt"] > 0:
         st.markdown("## Долговая нагрузка")
-        d1, d2, d3, d4 = st.columns(4)
-        d1.metric("Общий долг", fmt_rub(summary["total_debt"]))
-        d2.metric("Платежи / мес", fmt_rub(summary["total_monthly_payments"]))
-        months = summary["max_payoff_months"]
-        if months and months > 0:
-            years = months // 12
-            rem = months % 12
-            if years > 0:
-                d3.metric("До полного погашения", f"{years} г. {rem} мес.")
-            else:
-                d3.metric("До полного погашения", f"{months} мес.")
+
+        if summary["has_mortgage"] and summary["consumer_debt"] > 0:
+            # Show consumer debts first (actionable), mortgage separately
+            st.caption("Кредиты и карты (без ипотеки)")
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Долг", fmt_rub(summary["consumer_debt"]))
+            d2.metric("Платежи / мес", fmt_rub(summary["consumer_monthly"]))
+            cm = summary["consumer_max_months"]
+            d3.metric("До погашения", _fmt_payoff(cm) if cm > 0 else "—")
+            d4.metric("Переплата", fmt_rub(summary["consumer_interest"]) if summary["consumer_interest"] > 0 else "—")
+
+            st.caption("Итого с ипотекой")
+            e1, e2, e3, e4 = st.columns(4)
+            e1.metric("Общий долг", fmt_rub(summary["total_debt"]))
+            e2.metric("Все платежи / мес", fmt_rub(summary["total_monthly_payments"]))
+            months = summary["max_payoff_months"]
+            e3.metric("До полного погашения", _fmt_payoff(months) if months > 0 else "—")
+            e4.metric("Вся переплата", fmt_rub(summary["total_interest"]) if summary["total_interest"] > 0 else "—")
         else:
-            d3.metric("До полного погашения", "—")
-        if summary["total_interest"] > 0:
-            d4.metric("Переплата (прогноз)", fmt_rub(summary["total_interest"]))
-        else:
-            d4.metric("Переплата", "—")
+            # No mortgage or no consumer debts — show single row
+            d1, d2, d3, d4 = st.columns(4)
+            d1.metric("Общий долг", fmt_rub(summary["total_debt"]))
+            d2.metric("Платежи / мес", fmt_rub(summary["total_monthly_payments"]))
+            months = summary["max_payoff_months"]
+            d3.metric("До погашения", _fmt_payoff(months) if months > 0 else "—")
+            d4.metric("Переплата", fmt_rub(summary["total_interest"]) if summary["total_interest"] > 0 else "—")
 
     st.divider()
 
