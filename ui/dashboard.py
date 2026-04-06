@@ -329,10 +329,11 @@ def render_dashboard(selected_month: date, user_id: int):
         c6.metric("В накопления", fmt_rub(summary["recommended_savings"]))
 
         st.markdown("#### Структура расходов")
-        s1, s2, s3 = st.columns(3)
+        s1, s2, s3, s4 = st.columns(4)
         s1.metric("Фиксированные", fmt_rub(summary["fixed_expense_total"]))
         s2.metric("Переменные обязательные", fmt_rub(summary["variable_mandatory_total"]))
-        s3.metric("На жизнь (факт)", fmt_rub(summary["variable_life_total"]))
+        s3.metric("Платежи по долгам", fmt_rub(summary["obligation_payments_total"]))
+        s4.metric("На жизнь (факт)", fmt_rub(summary["variable_life_total"]))
 
         st.markdown("#### Все долговые обязательства")
         if not summary["priority_debts"]:

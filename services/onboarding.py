@@ -191,7 +191,10 @@ def build_onboarding_result(payload: dict):
 
     fixed_expenses_total = sum(float(x["amount"]) for x in payload["fixed_expenses"])
     variable_mandatory_total = sum(float(x["amount"]) for x in payload["variable_expenses"])
-    mandatory_total = fixed_expenses_total + variable_mandatory_total
+    obligation_payments_total = sum(
+        float(x.get("monthly_payment", 0) or 0) for x in payload.get("obligations", [])
+    )
+    mandatory_total = fixed_expenses_total + variable_mandatory_total + obligation_payments_total
 
     strategy = STRATEGIES[payload["strategy"]]
     net_income = tax_result["net_total_monthly"]
@@ -215,6 +218,7 @@ def build_onboarding_result(payload: dict):
         "tax_monthly": round(tax_result["tax_monthly"], 2),
         "fixed_expenses_total": round(fixed_expenses_total, 2),
         "variable_mandatory_total": round(variable_mandatory_total, 2),
+        "obligation_payments_total": round(obligation_payments_total, 2),
         "mandatory_total": round(mandatory_total, 2),
         "free_cashflow": round(free_cashflow, 2),
         "life_budget": round(life_budget, 2),

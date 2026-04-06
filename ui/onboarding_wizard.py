@@ -206,16 +206,9 @@ def _obligations_step():
         _go(1)
     if right.button("Сохранить и продолжить", type="primary"):
         obligations = st.session_state.saved_mortgages + st.session_state.saved_loans
+        # Фиксированные расходы — только НЕ-долговые (ЖКХ и т.п.)
+        # Долговые платежи берутся из таблицы obligations, не дублируем.
         fixed_expenses = []
-        for item in obligations:
-            fixed_expenses.append(
-                {
-                    "name": item["name"],
-                    "amount": float(item["monthly_payment"]),
-                    "category_name": item["name"],
-                    "note": "Создано onboarding wizard",
-                }
-            )
         for item in st.session_state.saved_fixed_items:
             fixed_expenses.append(
                 {

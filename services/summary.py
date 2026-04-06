@@ -47,7 +47,10 @@ def monthly_summary(selected_day: date, user_id: int):
         today_life = df[(today_mask) & (df["kind"] == "expense") & (df["expense_scope"] == "variable_life")]
         spent_today = float(today_life["amount"].sum()) if not today_life.empty else 0.0
 
-    mandatory_total = fixed_expense_total + variable_mandatory_total
+    # Obligation monthly payments from the obligations table
+    obligation_payments_total = float(obligations["monthly_payment"].sum()) if not obligations.empty else 0.0
+
+    mandatory_total = fixed_expense_total + variable_mandatory_total + obligation_payments_total
     free_cash_flow = max(income_total - mandatory_total, 0)
 
     life_pct = float(get_setting("strategy_life_pct", user_id, "60")) / 100.0
@@ -110,6 +113,7 @@ def monthly_summary(selected_day: date, user_id: int):
         "fixed_expense_total": _r(fixed_expense_total),
         "variable_mandatory_total": _r(variable_mandatory_total),
         "variable_life_total": _r(variable_life_total),
+        "obligation_payments_total": _r(obligation_payments_total),
         "mandatory_total": _r(mandatory_total),
         "free_cash_flow": _r(free_cash_flow),
         "life_budget": _r(life_budget),
