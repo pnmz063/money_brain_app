@@ -3,9 +3,12 @@ from __future__ import annotations
 from typing import Dict, Any, List
 
 from services.utils import to_float, estimate_payoff_months
+from services.format import fmt_amount_compact
 
 # Re-export for backward compatibility (dashboard.py imports _to_float from here)
 _to_float = to_float
+# Backward-compat alias — historical name used inside this module.
+_fmt_amount = fmt_amount_compact
 
 
 def classify_obligation(obligation: Dict[str, Any]) -> Dict[str, Any]:
@@ -99,17 +102,6 @@ def classify_obligation(obligation: Dict[str, Any]) -> Dict[str, Any]:
         "payoff_months": payoff_months,
         "total_interest": round(total_interest, 2),
     }
-
-
-def _fmt_amount(value: float) -> str:
-    """Format amount in compact Russian style."""
-    if value <= 0:
-        return "0 ₽"
-    if value >= 1_000_000:
-        return f"{value / 1_000_000:.1f} млн ₽"
-    if value >= 1_000:
-        return f"{value / 1_000:.0f} тыс ₽"
-    return f"{value:.0f} ₽"
 
 
 def rank_obligations(obligations: List[Dict]) -> List[Dict]:
