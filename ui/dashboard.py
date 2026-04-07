@@ -13,6 +13,8 @@ from services.summary import monthly_summary, fmt_rub
 from services.debt_priority import classify_obligation, action_label
 from services.utils import to_float as _to_float
 from services.onboarding import STRATEGIES
+from services.insights import build_insights
+from services.optimizer import build_optimal_plan
 
 
 OBLIGATION_TYPE_LABELS = {
@@ -47,6 +49,83 @@ def _fmt_payoff(months: int | None) -> str:
     if years > 0:
         return f"{years} г. {rem} мес."
     return f"{months} мес."
+
+
+def _render_plan_tab(summary: dict, user_id: int):
+    """Render the «План» tab — loss-aversion insights + optimal plan builder."""
+    obligations_records = [
+        {
+            "id": d.get("id"),
+            "name": d.get("name"),
+            "balance": d.get("balance"),
+            "rate": d.get("rate"),
+            "monthly_payment": d.get("monthly_payment"),
+            "obligation_type": d.get("obligation_type"),
+        }
+        for d in summary.get("priority_debts", [])
+    ]
+
+    if not obligations_records:
+        st.info("Добавь обязательства — и я покажу, сколько они тебе стоят и как их оптимально гасить.")
+        return
+
+    insights = build_insights(obligations_records, top_n=3)
+
+    st.subheader("Что тебе стоят твои долги")
+    if not insights:
+        st.caption("Доплатить нечего — все долги уже идут оптимально или закрыты.")
+    else:
+        for ins in insights:
+            with st.container(border=True):
+                st.markdown(f"### 🔴 {ins['title']}")
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Цена в день", fmt_rub(round(ins["daily_cost"], 2)))
+                col2.metric("Текущий платёж", fmt_rub(ins["monthly_payment"]))
+                col3.metric("Ставка", f"{ins['rate']:.1f}%")
+                st.caption(ins["action"])
+
+    st.divider()
+
+    recommended_prepayment = summary.get("recommended_prepayment", 0.0)
+    st.subheader("Собери лучший план")
+    st.caption(
+        f"По твоей стратегии на досрочку доступно {fmt_rub(recommended_prepayment)}/мес. "
+        f"Я распределю их по самым дорогим долгам — это «лавина»."
+    )
+
+    if recommended_prepayment <= 0:
+        st.warning("Сейчас на досрочку не остаётся свободных денег. Пересмотри стратегию или расходы.")
+        return
+
+    if st.button("⚡ Собрать оптимальный план", type="primary", use_container_width=True):
+        st.session_state["_plan_built"] = True
+
+    if st.session_state.get("_plan_built"):
+        plan = build_optimal_plan(obligations_records, recommended_prepayment)
+
+        col1, col2 = st.columns(2)
+        col1.metric(
+            "Сэкономишь процентов",
+            fmt_rub(round(plan["interest_saved"], 0)),
+            delta=f"−{plan['months_saved']} мес." if plan["months_saved"] > 0 else None,
+        )
+        col2.metric(
+            "Закроешь всё за",
+            _fmt_payoff(plan["optimal"]["max_months"]),
+            delta=f"вместо {_fmt_payoff(plan['baseline']['max_months'])}",
+            delta_color="off",
+        )
+
+        st.markdown("**Порядок закрытия:**")
+        for i, d in enumerate(plan["closing_order"], 1):
+            st.write(f"{i}. **{d['name']}** — закроется через {_fmt_payoff(d['closed_month'])}")
+
+        with st.expander("Детали сравнения"):
+            st.write(f"**Без плана** (только минимумы): переплата {fmt_rub(round(plan['baseline']['total_interest'], 0))}, "
+                     f"срок {_fmt_payoff(plan['baseline']['max_months'])}")
+            st.write(f"**С планом** (лавина + {fmt_rub(recommended_prepayment)}/мес): "
+                     f"переплата {fmt_rub(round(plan['optimal']['total_interest'], 0))}, "
+                     f"срок {_fmt_payoff(plan['optimal']['max_months'])}")
 
 
 def _apply_strategy(strategy_name: str, user_id: int):
@@ -216,7 +295,11 @@ def render_dashboard(selected_month: date, user_id: int):
     st.divider()
 
     # ---- БЛОК 2 — Табы ----
-    tab1, tab2, tab3 = st.tabs(["Операции", "Сводка", "Ещё"])
+    tab1, tab_plan, tab2, tab3 = st.tabs(["Операции", "План", "Сводка", "Ещё"])
+
+    # -- Таб «План» --
+    with tab_plan:
+        _render_plan_tab(summary, user_id)
 
     # -- Таб «Операции» --
     with tab1:
