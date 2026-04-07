@@ -19,6 +19,7 @@ from services.insights import (
     most_expensive_debt,
     cost_of_inaction_year,
     cost_per_100k_per_month,
+    simulate_scenario,
 )
 from services.optimizer import build_optimal_plan
 
@@ -129,6 +130,10 @@ def _render_plan_tab(summary: dict, user_id: int):
 
     insights = build_insights(obligations_records, top_n=10)
 
+    # Дефолт для досрочки в карточках — берём из плана пользователя.
+    # Если по плану 0 (нет свободных), даём минимальный дефолт 1000, чтобы было что показать.
+    default_extra = max(int(round(recommended_prepayment)), 1000)
+
     for i, ins in enumerate(insights, 1):
         with st.container(border=True):
             badge_col, title_col = st.columns([1, 9])
@@ -153,12 +158,47 @@ def _render_plan_tab(summary: dict, user_id: int):
             with st.expander("Подробнее о долге"):
                 st.write(f"Остаток: **{fmt_rub(ins['balance'])}**")
                 st.write(f"Цена в день (проценты): **{fmt_rub(round(ins['daily_cost'], 2))}**")
-                if ins.get("savings", 0) > 0:
-                    st.write(
-                        f"Если добавить +{int(ins['extra']):,} ₽/мес к платежу — сэкономишь "
-                        f"**{fmt_rub(round(ins['savings'], 0))}** процентов и закроешь "
-                        f"на **{ins['months_saved']} мес.** раньше.".replace(",", "\u202f")
+
+                if ins["temperature"] != "mortgage":
+                    st.markdown("**Что будет, если добавить досрочку именно в этот долг?**")
+                    extra = st.number_input(
+                        "Сколько ₽/мес добавишь к платежу",
+                        min_value=0,
+                        max_value=1_000_000,
+                        value=default_extra,
+                        step=1000,
+                        key=f"extra_{ins.get('obligation_id', i)}",
+                        help=(
+                            "По умолчанию подставлена сумма, которую твой план выделяет "
+                            "на досрочку в месяц. Можешь задать своё значение."
+                        ),
                     )
+                    if extra > 0:
+                        sc = simulate_scenario(
+                            {
+                                "balance": ins["balance"],
+                                "rate": ins["rate"],
+                                "monthly_payment": ins["monthly_payment"],
+                            },
+                            extra,
+                        )
+                        if sc is not None:
+                            sc1, sc2 = st.columns(2)
+                            sc1.metric(
+                                "Сэкономишь процентов",
+                                fmt_rub(round(sc["savings"], 0)),
+                            )
+                            sc2.metric(
+                                "Закроешь раньше",
+                                f"{sc['months_saved']} мес.",
+                                delta=f"вместо {_fmt_payoff(sc['baseline_months'])}",
+                                delta_color="off",
+                            )
+                            st.caption(
+                                f"Новый платёж: **{fmt_rub(round(sc['new_payment'], 0))}/мес**, "
+                                f"закроется через **{_fmt_payoff(sc['new_months'])}** "
+                                f"вместо {_fmt_payoff(sc['baseline_months'])}."
+                            )
 
 
 def _months_to_date(months: int) -> str:
