@@ -245,26 +245,39 @@ def _render_plan_builder(obligations_records: list[dict], recommended_prepayment
         st.caption("После каждого закрытия его минимальный платёж освобождается в семейном бюджете.")
 
         cumulative_freed = 0.0
+        rolling_freed_before = 0.0  # минимумы УЖЕ закрытых долгов до этого
         for i, d in enumerate(plan["closing_order"], 1):
             min_pay = d.get("min_payment", 0)
+            # Сколько реально летит в этот долг, пока он — цель лавины
+            active_payment = min_pay + recommended_prepayment + rolling_freed_before
             cumulative_freed += min_pay
             with st.container(border=True):
-                t1, t2, t3 = st.columns([3, 2, 3])
+                t1, t2, t3, t4 = st.columns([3, 3, 2, 3])
                 t1.markdown(f"**#{i} {d['name']}**")
                 t1.caption(f"Ставка {d.get('rate', 0):.1f}%")
                 t2.metric(
+                    "Платить в месяц",
+                    f"{fmt_rub(round(active_payment, 0))}",
+                    delta=(
+                        f"мин. {fmt_rub(min_pay)} + досрочка {fmt_rub(round(active_payment - min_pay, 0))}"
+                    ),
+                    delta_color="off",
+                    help="Минимальный платёж + вся свободная досрочка + минимумы уже закрытых долгов.",
+                )
+                t3.metric(
                     "Закроется",
                     _months_to_date(d["closed_month"]),
                     delta=_fmt_payoff(d["closed_month"]),
                     delta_color="off",
                 )
-                t3.metric(
-                    "Освободит в бюджете",
+                t4.metric(
+                    "Потом освободит",
                     f"+{fmt_rub(min_pay)}/мес",
                     delta=f"всего свободно: {fmt_rub(cumulative_freed)}/мес",
                     delta_color="off",
                     help=f"Это +{int(min_pay/30):,} ₽ к ежедневному лимиту трат.".replace(",", "\u202f"),
                 )
+            rolling_freed_before += min_pay
 
     # ---- Сравнение baseline vs optimal ----
     st.markdown("#### 📊 С планом vs без плана")
