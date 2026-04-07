@@ -130,6 +130,8 @@ def _simulate_avalanche(obligations: list[dict], extra_budget: float) -> dict:
                 "name": d["name"],
                 "closed_month": d["closed_month"],
                 "total_paid": d["paid"],
+                "min_payment": d["min_payment"],
+                "rate": d["rate"],
             }
             for d in debts
         ],

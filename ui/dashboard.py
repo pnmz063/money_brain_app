@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from dateutil.relativedelta import relativedelta
 import streamlit as st
 
 from db.migrations import init_db, seed_defaults_for_user
@@ -117,6 +118,11 @@ def _render_plan_tab(summary: dict, user_id: int):
 
     st.divider()
 
+    # ---- ПЛАН (теперь сразу под hero) ----
+    _render_plan_builder(obligations_records, recommended_prepayment)
+
+    st.divider()
+
     # ---- Карточки долгов: отсортированы по ставке ----
     st.subheader("Гаси в этом порядке")
     st.caption("Долги отсортированы от самого дорогого к самому дешёвому. Сначала закрывай красные.")
@@ -154,48 +160,159 @@ def _render_plan_tab(summary: dict, user_id: int):
                         f"на **{ins['months_saved']} мес.** раньше.".replace(",", "\u202f")
                     )
 
-    st.divider()
 
-    # ---- План оптимизатор ----
-    st.subheader("Собери лучший план")
-    st.caption(
-        f"По твоей стратегии на досрочку доступно **{fmt_rub(recommended_prepayment)}/мес**. "
-        f"Я распределю их по самым дорогим долгам — это «лавина»."
-    )
+def _months_to_date(months: int) -> str:
+    """Convert months-from-now into a Russian-formatted month/year label."""
+    if not months or months <= 0:
+        return "—"
+    target = date.today() + relativedelta(months=int(months))
+    months_ru = ["янв", "фев", "мар", "апр", "май", "июн",
+                 "июл", "авг", "сен", "окт", "ноя", "дек"]
+    return f"{months_ru[target.month - 1]} {target.year}"
+
+
+def _render_plan_builder(obligations_records: list[dict], recommended_prepayment: float):
+    """Plan optimizer block — now placed right under the hero, with rich output."""
+    st.subheader("⚡ Собери оптимальный план")
 
     if recommended_prepayment <= 0:
-        st.warning("Сейчас на досрочку не остаётся свободных денег. Пересмотри стратегию или расходы.")
+        st.warning(
+            "Сейчас на досрочку не остаётся свободных денег. "
+            "Пересмотри стратегию или расходы — и приложение распределит их по «лавине»."
+        )
         return
+
+    st.caption(
+        f"По твоей стратегии на досрочку доступно **{fmt_rub(recommended_prepayment)}/мес**. "
+        f"Я направлю их в самые дорогие долги — это лавинная стратегия."
+    )
 
     if st.button("⚡ Собрать оптимальный план", type="primary", use_container_width=True):
         st.session_state["_plan_built"] = True
 
-    if st.session_state.get("_plan_built"):
-        plan = build_optimal_plan(obligations_records, recommended_prepayment)
+    if not st.session_state.get("_plan_built"):
+        return
 
-        col1, col2 = st.columns(2)
-        col1.metric(
-            "Сэкономишь процентов",
-            fmt_rub(round(plan["interest_saved"], 0)),
+    plan = build_optimal_plan(obligations_records, recommended_prepayment)
+    baseline = plan["baseline"]
+    optimal = plan["optimal"]
+
+    # ---- Главный результат: 4 outcome-метрики ----
+    interest_saved = round(plan["interest_saved"], 0)
+    pct_saved = (
+        plan["interest_saved"] / baseline["total_interest"] * 100
+        if baseline["total_interest"] > 0 else 0
+    )
+
+    with st.container(border=True):
+        st.markdown("#### 🎯 Результат плана")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric(
+            "Debt-free",
+            _months_to_date(optimal["max_months"]),
             delta=f"−{plan['months_saved']} мес." if plan["months_saved"] > 0 else None,
+            help="Когда закроешь все долги по плану. Дельта — на сколько раньше, чем без плана.",
         )
-        col2.metric(
+        c2.metric(
+            "Сэкономишь",
+            fmt_rub(interest_saved),
+            delta=f"−{pct_saved:.0f}% переплаты" if pct_saved > 0 else None,
+            help="Сколько процентов не уйдёт банкам за весь срок благодаря лавине.",
+        )
+        c3.metric(
             "Закроешь всё за",
-            _fmt_payoff(plan["optimal"]["max_months"]),
-            delta=f"вместо {_fmt_payoff(plan['baseline']['max_months'])}",
+            _fmt_payoff(optimal["max_months"]),
+            delta=f"вместо {_fmt_payoff(baseline['max_months'])}",
             delta_color="off",
         )
+        first_freed = next(
+            (d for d in plan["closing_order"] if d.get("closed_month")),
+            None,
+        )
+        if first_freed:
+            c4.metric(
+                "Первая разгрузка",
+                f"+{fmt_rub(first_freed.get('min_payment', 0))}/мес",
+                delta=f"через {_fmt_payoff(first_freed['closed_month'])}",
+                delta_color="off",
+                help="Сколько освободится в бюджете после закрытия первого долга.",
+            )
 
-        st.markdown("**Порядок закрытия:**")
+    # ---- Таймлайн закрытия с освобождаемым cash flow ----
+    if plan["closing_order"]:
+        st.markdown("#### 📅 Когда какой долг закроется")
+        st.caption("После каждого закрытия его минимальный платёж освобождается в семейном бюджете.")
+
+        cumulative_freed = 0.0
         for i, d in enumerate(plan["closing_order"], 1):
-            st.write(f"{i}. **{d['name']}** — закроется через {_fmt_payoff(d['closed_month'])}")
+            min_pay = d.get("min_payment", 0)
+            cumulative_freed += min_pay
+            with st.container(border=True):
+                t1, t2, t3 = st.columns([3, 2, 3])
+                t1.markdown(f"**#{i} {d['name']}**")
+                t1.caption(f"Ставка {d.get('rate', 0):.1f}%")
+                t2.metric(
+                    "Закроется",
+                    _months_to_date(d["closed_month"]),
+                    delta=_fmt_payoff(d["closed_month"]),
+                    delta_color="off",
+                )
+                t3.metric(
+                    "Освободит в бюджете",
+                    f"+{fmt_rub(min_pay)}/мес",
+                    delta=f"всего свободно: {fmt_rub(cumulative_freed)}/мес",
+                    delta_color="off",
+                    help=f"Это +{int(min_pay/30):,} ₽ к ежедневному лимиту трат.".replace(",", "\u202f"),
+                )
 
-        with st.expander("Детали сравнения"):
-            st.write(f"**Без плана** (только минимумы): переплата {fmt_rub(round(plan['baseline']['total_interest'], 0))}, "
-                     f"срок {_fmt_payoff(plan['baseline']['max_months'])}")
-            st.write(f"**С планом** (лавина + {fmt_rub(recommended_prepayment)}/мес): "
-                     f"переплата {fmt_rub(round(plan['optimal']['total_interest'], 0))}, "
-                     f"срок {_fmt_payoff(plan['optimal']['max_months'])}")
+    # ---- Сравнение baseline vs optimal ----
+    st.markdown("#### 📊 С планом vs без плана")
+
+    cmp_col1, cmp_col2 = st.columns(2)
+    with cmp_col1:
+        with st.container(border=True):
+            st.markdown("**Без плана** (только минимумы)")
+            st.metric("Переплата", fmt_rub(round(baseline["total_interest"], 0)))
+            st.metric("Срок", _fmt_payoff(baseline["max_months"]))
+            st.caption(f"Закроешь всё к {_months_to_date(baseline['max_months'])}")
+    with cmp_col2:
+        with st.container(border=True):
+            st.markdown(f"**С планом** (+{fmt_rub(recommended_prepayment)}/мес лавиной)")
+            st.metric(
+                "Переплата",
+                fmt_rub(round(optimal["total_interest"], 0)),
+                delta=f"−{fmt_rub(interest_saved)}",
+                delta_color="inverse",
+            )
+            st.metric(
+                "Срок",
+                _fmt_payoff(optimal["max_months"]),
+                delta=f"−{plan['months_saved']} мес.",
+                delta_color="inverse",
+            )
+            st.caption(f"Закроешь всё к {_months_to_date(optimal['max_months'])}")
+
+    # ---- Объяснение «почему именно так» ----
+    with st.expander("Почему именно такой план"):
+        st.write(
+            "**Лавинная стратегия** (debt avalanche): вся свободная сумма идёт в долг "
+            "с самой высокой ставкой, пока он не закроется. Потом его минимальный платёж "
+            "тоже добавляется к лавине и катится в следующий по дороговизне долг — и так далее."
+        )
+        st.write(
+            "Это математически оптимальный способ: на каждый рубль ты экономишь "
+            "максимум процентов. Альтернатива (\"снежный ком\" — гасить мелкие долги первыми) "
+            "психологически приятнее, но обходится дороже."
+        )
+        if first_freed:
+            st.write(
+                f"В твоём случае первым закрывается **{first_freed['name']}** "
+                f"(ставка {first_freed.get('rate', 0):.1f}%) — через "
+                f"{_fmt_payoff(first_freed['closed_month'])}. "
+                f"После этого +{fmt_rub(first_freed.get('min_payment', 0))}/мес "
+                f"автоматически перекатываются в следующий долг."
+            )
 
 
 def _apply_strategy(strategy_name: str, user_id: int):
