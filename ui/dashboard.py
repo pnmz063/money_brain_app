@@ -13,7 +13,12 @@ from services.summary import monthly_summary, fmt_rub
 from services.debt_priority import classify_obligation, action_label
 from services.utils import to_float as _to_float
 from services.onboarding import STRATEGIES
-from services.insights import build_insights
+from services.insights import (
+    build_insights,
+    most_expensive_debt,
+    cost_of_inaction_year,
+    cost_per_100k_per_month,
+)
 from services.optimizer import build_optimal_plan
 
 
@@ -52,7 +57,11 @@ def _fmt_payoff(months: int | None) -> str:
 
 
 def _render_plan_tab(summary: dict, user_id: int):
-    """Render the «План» tab — loss-aversion insights + optimal plan builder."""
+    """Render the «План» tab — honest debt analysis + plan builder.
+
+    Key product principle: rank by RATE, not by total interest.
+    Total interest is misleading for long mortgages.
+    """
     obligations_records = [
         {
             "id": d.get("id"),
@@ -66,30 +75,91 @@ def _render_plan_tab(summary: dict, user_id: int):
     ]
 
     if not obligations_records:
-        st.info("Добавь обязательства — и я покажу, сколько они тебе стоят и как их оптимально гасить.")
+        st.info("Добавь обязательства — и я покажу, какой долг самый дорогой и что с ним делать.")
         return
 
-    insights = build_insights(obligations_records, top_n=3)
+    # ---- HERO: самый дорогой долг ----
+    worst = most_expensive_debt(obligations_records)
+    if worst is not None:
+        with st.container(border=True):
+            st.markdown(f"### 🔴 Самый дорогой долг — {worst['name']}")
+            multiplier = worst.get("multiplier_vs_cheapest")
+            if multiplier and multiplier >= 1.5:
+                st.markdown(
+                    f"Ставка **{worst['rate']:.1f}%** — каждый месяц набегает "
+                    f"**{int(worst['cost_per_100k']):,} ₽** процентов на каждые 100 000 ₽ остатка. "
+                    f"Это в **{multiplier:.1f} раза** дороже самого дешёвого твоего долга.".replace(",", "\u202f")
+                )
+            else:
+                st.markdown(
+                    f"Ставка **{worst['rate']:.1f}%** — каждый месяц набегает "
+                    f"**{int(worst['cost_per_100k']):,} ₽** процентов на каждые 100 000 ₽ остатка.".replace(",", "\u202f")
+                )
+            st.caption("Гасить его в первую очередь — даёт максимальный эффект на каждый рубль досрочки.")
 
-    st.subheader("Что тебе стоят твои долги")
-    if not insights:
-        st.caption("Доплатить нечего — все долги уже идут оптимально или закрыты.")
-    else:
-        for ins in insights:
-            with st.container(border=True):
-                st.markdown(f"### 🔴 {ins['title']}")
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Цена в день", fmt_rub(round(ins["daily_cost"], 2)))
-                col2.metric("Текущий платёж", fmt_rub(ins["monthly_payment"]))
-                col3.metric("Ставка", f"{ins['rate']:.1f}%")
-                st.caption(ins["action"])
+    # ---- SUMMARY-полоса ----
+    recommended_prepayment = summary.get("recommended_prepayment", 0.0)
+    inaction = cost_of_inaction_year(obligations_records)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Свободно на досрочку", f"{fmt_rub(recommended_prepayment)}/мес")
+    col2.metric(
+        "Самый дорогой",
+        worst["name"] if worst else "—",
+        delta=f"{worst['rate']:.1f}%" if worst else None,
+        delta_color="off",
+    )
+    col3.metric(
+        "Дорогие долги съедят за год",
+        fmt_rub(round(inaction["total_year_interest"], 0)),
+        help="Сколько процентов набежит за следующие 12 месяцев на твоих кредитах и кредитках (без ипотеки).",
+    )
 
     st.divider()
 
-    recommended_prepayment = summary.get("recommended_prepayment", 0.0)
+    # ---- Карточки долгов: отсортированы по ставке ----
+    st.subheader("Гаси в этом порядке")
+    st.caption("Долги отсортированы от самого дорогого к самому дешёвому. Сначала закрывай красные.")
+
+    insights = build_insights(obligations_records, top_n=10)
+
+    for i, ins in enumerate(insights, 1):
+        with st.container(border=True):
+            badge_col, title_col = st.columns([1, 9])
+            badge_col.markdown(f"### #{i}")
+            title_col.markdown(f"### {ins['title']}")
+            title_col.caption(ins["subtitle"])
+
+            mcol1, mcol2, mcol3 = st.columns(3)
+            mcol1.metric("Ставка", f"{ins['rate']:.1f}%")
+            mcol2.metric(
+                "Цена 100к/мес",
+                fmt_rub(int(ins["cost_per_100k"])),
+                help="Сколько процентов набегает за месяц на каждые 100 000 ₽ остатка. Сравнимо между долгами.",
+            )
+            mcol3.metric("Текущий платёж", fmt_rub(ins["monthly_payment"]))
+
+            if ins.get("action") and ins["temperature"] != "mortgage":
+                st.caption(f"💡 {ins['action']}")
+            elif ins["temperature"] == "mortgage":
+                st.caption("💡 Сначала закрой дорогие кредиты, потом думай про досрочку по ипотеке.")
+
+            with st.expander("Подробнее о долге"):
+                st.write(f"Остаток: **{fmt_rub(ins['balance'])}**")
+                st.write(f"Цена в день (проценты): **{fmt_rub(round(ins['daily_cost'], 2))}**")
+                if ins.get("savings", 0) > 0:
+                    st.write(
+                        f"Если добавить +{int(ins['extra']):,} ₽/мес к платежу — сэкономишь "
+                        f"**{fmt_rub(round(ins['savings'], 0))}** процентов и закроешь "
+                        f"на **{ins['months_saved']} мес.** раньше.".replace(",", "\u202f")
+                    )
+
+    st.divider()
+
+    # ---- План оптимизатор ----
     st.subheader("Собери лучший план")
     st.caption(
-        f"По твоей стратегии на досрочку доступно {fmt_rub(recommended_prepayment)}/мес. "
+        f"По твоей стратегии на досрочку доступно **{fmt_rub(recommended_prepayment)}/мес**. "
         f"Я распределю их по самым дорогим долгам — это «лавина»."
     )
 
